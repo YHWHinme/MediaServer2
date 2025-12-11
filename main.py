@@ -1,17 +1,21 @@
 # utility imports
+import tempfile
+import os
 from langchain_chroma import Chroma
 
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.runnables import RunnablePassthrough
+from langchain_core.messages import HumanMessage
+from langchain_community.document_loaders import PyPDFLoader
 
 # Ai imports
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 # Local file imports
 import streamlit as st
-from langchain_core.messages import HumanMessage
+import time
 
-from tools.pdf import loadPdf, postPDf
+from tools.pdf import loadPdf
 
 
 class Agent:
@@ -22,10 +26,10 @@ class Agent:
 
     def __init__(self, template: str):
         self.embeddingClient = OllamaEmbeddings(
-            base_url="http://172.16.5.60:3000", model="embeddinggemma:300m"
+            base_url="http://172.16.5.234:3000", model="embeddinggemma:300m"
         )
         self.chatClient = ChatOllama(
-            base_url="http://172.16.5.60:3000", model="gemma3:270m"
+            base_url="http://172.16.5.234:3000", model="deepseek-r1:1.5b"
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -33,6 +37,7 @@ class Agent:
             embedding_function=self.embeddingClient,
             persist_directory=self.chromaPath,  # Where to save data locally, remove if not necessary
         )
+        self.tempDir = "./Data/deps/temp/"
 
         # New: Prompt template for academic PDF analysis
         self.prompt = ChatPromptTemplate.from_messages(
@@ -72,6 +77,20 @@ Instructions:
             | self.chatClient
         )
 
+    def process_pdf(self, uploaded_file):
+        """Process Streamlit UploadedFile into PyPDFLoader using temp file"""
+
+        # Create temporary file from uploaded file bytes
+        with tempfile.NamedTemporaryFile(
+            dir=self.tempDir, delete=False, suffix=".pdf"
+        ) as tmp_file:
+            tmp_file.write(uploaded_file.getvalue())
+            tmp_file_path = tmp_file.name
+
+        # Create loader with temp file path (cleanup moved to loadPdf)
+        loader = PyPDFLoader(tmp_file_path)
+        return loader
+
     def GenOllama(self, question: str):
         return self.rag_chain.invoke(question)
 
@@ -90,7 +109,7 @@ Question: {question}
 
 Instructions:
 - Answer based solely on the provided context.
-- Cite sources by referencing document metadata (e.g., page numbers or titles) if available in the context.
+- Answer if the question isn't academic, don't give an academic answer- Cite sources by referencing document metadata (e.g., page numbers or titles) if available in the context.
 - If the context is insufficient, state "Insufficient information in the provided documents" and suggest rephrasing the question.
 - Maintain an academic tone: objective, formal, and concise.
 - Structure your response with headings like "Summary," "Key Insights," or "Conclusion" for clarity.
@@ -103,12 +122,41 @@ Instructions:
         "Upload a pdf please", type="pdf"
     )  # uploading the pdf
 
+    userPrompt = st.text_area("Prompting")
+    if userPrompt:
+        answerBtn = st.button("Send prompt")
+        if answerBtn:   
+            answer = ollamaAgent.GenOllama(userPrompt).content
+            st.write(answer)
+
+
     if uploadedPdf:
-        # PDf post processing
-        processed_pdf = postPDf(uploadedPdf)
-        button = st.button("Process Pdf") # Ensuring button is clicked
-        if button: # Adding document to vector database if button is clicked
-            loadPdf(processed_pdf, ollamaAgent.vectorStore)
+        # PDF post processing
+        if st.button("Process Pdf"):  # Ensuring button is clicked
+            try:
+                # Stage 1: File processing
+                with st.spinner("📄 Processing uploaded PDF..."):
+                    st.info("🔄 Step 1/2: Creating PDF loader...")
+                    processed_pdf = ollamaAgent.process_pdf(uploadedPdf)
+                    time.sleep(0.5)  # Brief pause for UX
+
+                # Stage 2: Document loading and vector store addition
+                with st.spinner("📚 Loading documents and adding to knowledge base..."):
+                    st.info("🔄 Step 2/2: Processing and indexing content...")
+                    loadPdf(processed_pdf, ollamaAgent.vectorStore)
+                    time.sleep(0.5)
+
+                # Success notification
+                st.success("✅ PDF processing complete!")
+                st.balloons()  # Celebration animation
+
+                # Show processing summary
+                db_size = ollamaAgent.vectorStore._collection.count()
+                st.info(f"📊 Knowledge base now contains {db_size} document chunks")
+
+            except Exception as e:
+                st.error(f"❌ PDF processing failed: {str(e)}")
+                st.warning("💡 Check the console for detailed error information")
 
 
 if __name__ == "__main__":
