@@ -1,0 +1,17 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+__init__.py
+
+.ipynb_checkpoints/
+Data/
+
+# Uv stuff
+uv.lock
