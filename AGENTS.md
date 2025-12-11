@@ -19,4 +19,8 @@
 - **Security**: Never log secrets/keys. Use env vars for config (e.g., Ollama URLs).
 - **Commits**: Conventional commits (feat:, fix:, etc.). No secrets in commits.
 
+## Pending Improvements
+- ✅ COMPLETED: Fix prompt template in Agent class: Replaced raw string template with ChatPromptTemplate.from_messages() for proper chat formatting, including system message with {context} and MessagesPlaceholder for {question} to resolve ValueError and align with working examples.
+- Add MCP (Model Context Protocol) integration: Implement MCP Python SDK to enable Obsidian integration via Docker MCP server. Requires API key management (python-dotenv), MCP client setup, and Docker container orchestration for connecting to Obsidian Local REST API plugin.
+
 No Cursor or Copilot rules found.
