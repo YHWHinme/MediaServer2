@@ -7,6 +7,7 @@ from langchain_chroma import Chroma
 # Ai MOdels
 from langchain_ollama import ChatOllama
 from langchain_ollama import OllamaEmbeddings
+import streamlit
 
 
 # Models
@@ -23,6 +24,9 @@ vector_store = Chroma(
     embedding_function=embeddings,
     persist_directory="./Data/Chroma",  # Where to save data locally, remove if not necessary
 )
+
+def postPDf(input_pdf):
+    return PyPDFLoader(input_pdf)
 
 def loadPdf(pdf: PyPDFLoader, storeClient):
     # Initing values
