@@ -1,4 +1,5 @@
 # utility imports
+from typing import Callable
 import tempfile
 from langchain_chroma import Chroma
 
@@ -14,6 +15,7 @@ import streamlit as st
 import time
 
 from tools.pdf import loadPdf
+from tools.websearching import perpSearch
 import soundGen
 
 
@@ -28,7 +30,7 @@ class Agent:
             base_url="http://172.16.5.234:3000", model="embeddinggemma:300m"
         )
         self.chatClient = ChatOllama(
-            base_url="http://172.16.5.234:3000", model="qwen3:4b"
+            base_url="http://172.16.5.234:3000", model="qwen3-vl:4b"
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -41,10 +43,13 @@ class Agent:
         # TTS function
         self.tts = soundGen.text_to_speech
 
-        # Create and bind the vector search tool
-        self.vector_search_tool_instance = self.create_vector_search_tool()
+        # Create and bind the search tools
+        self.vectorToolInstance = self.createTool(
+            self.vector_search_tool, "vector store", "vectorToolInstance"
+        )
+        self.webToolInstance = self.createTool(perpSearch, "web", "webToolInstance")
         self.tool_bound_chat_client = self.chatClient.bind_tools(
-            [self.vector_search_tool_instance]
+            [self.vectorToolInstance, self.webToolInstance]
         )
 
     def process_pdf(self, uploaded_file):
@@ -64,16 +69,18 @@ class Agent:
     def GenOllama(self, question: str):
         """Tool-calling agent that can dynamically search documents."""
         # System prompt for tool-calling agent
-        system_prompt = """You are an academic research companion specializing in analyzing PDF documents.
+        system_prompt = """You are an academic research companion with access to multiple information sources.
 
-You have access to a vector_search_tool that can search through uploaded documents.
-Use this tool when you need specific information from the documents.
+Available tools:
+- vectorToolInstance: Search through uploaded PDF documents for specific information
+- webToolInstance: Search the web for current information not available in local documents
 
 Guidelines:
-- For questions requiring document evidence: Use vector_search_tool first
+- Use vectorToolInstance when answering questions about uploaded documents
+- Use webToolInstance when you need current web information or the question requires up-to-date data
 - For general knowledge questions: Answer directly from your training
-- Always cite document sources when using search results
-- If no relevant documents exist, clearly state this
+- Always cite sources when using search results
+- If no relevant information exists, clearly state this
 
 Be concise, academic, and evidence-based in your responses."""
 
@@ -97,6 +104,11 @@ Be concise, academic, and evidence-based in your responses."""
                     messages.append(
                         ToolMessage(content=tool_result, tool_call_id=tool_call["id"])
                     )
+                elif tool_call["name"] == "webToolInstance":
+                    tool_result = self.webToolInstance.invoke(tool_call["args"])
+                    messages.append(
+                        ToolMessage(content=tool_result, tool_call_id=tool_call["id"])
+                    )
 
             # Get final response with tool results
             final_response = self.tool_bound_chat_client.invoke(messages)
@@ -109,7 +121,7 @@ Be concise, academic, and evidence-based in your responses."""
         return self.vectorStore._collection.count() == 0
 
     def vector_search_tool(self, query: str, k: int = 3) -> str:
-        """Search the vector store for relevant document chunks based on the query.
+        f"""Search the vector store for relevant document chunks based on the query.
 
         Args:
             query: The search query to find relevant documents
@@ -150,15 +162,20 @@ Be concise, academic, and evidence-based in your responses."""
         except Exception as e:
             return f"Error performing vector search: {str(e)}"
 
-    def create_vector_search_tool(self):
+    def createTool(self, importedFunction: Callable, desciptVal: str, toolName: str):
         """Create the vector search tool for binding to the LLM."""
 
         @tool
-        def vector_search_tool(query: str, k: int = 3) -> str:
-            """Search the vector store for relevant document chunks based on the query."""
-            return self.vector_search_tool(query, k)
+        def dynamicTool(query: str, k: int = 3) -> str:
+            """Search for relevant information based on the query."""
+            return importedFunction(query, k)
 
-        return vector_search_tool
+        # Set unique name and description to avoid tool collisions
+        dynamicTool.name = toolName
+        dynamicTool.description = (
+            f"Search the {desciptVal} for relevant document chunks based on the query."
+        )
+        return dynamicTool
 
 
 def run_streamlit_app():
@@ -180,7 +197,7 @@ Instructions:
 
     ollamaAgent = Agent(template=sysTemplate)
 
-    #Checking if chroma db is empty
+    # Checking if chroma db is empty
     if ollamaAgent.vectorStore._collection.count() == 0:
         st.info("The vector store is empty, upload something", icon="ℹ️")
     # Streamlit UI
