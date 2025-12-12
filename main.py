@@ -43,14 +43,11 @@ class Agent:
         # TTS function
         self.tts = soundGen.text_to_speech
 
-        # Create and bind the search tools
+        # Create the search tools (binding happens dynamically in GenOllama)
         self.vectorToolInstance = self.createTool(
             self.vector_search_tool, "vector store", "vectorToolInstance"
         )
         self.webToolInstance = self.createTool(perpSearch, "web", "webToolInstance")
-        self.tool_bound_chat_client = self.chatClient.bind_tools(
-            [self.vectorToolInstance, self.webToolInstance]
-        )
 
     def process_pdf(self, uploaded_file):
         """Process Streamlit UploadedFile into PyPDFLoader using temp file"""
@@ -66,10 +63,12 @@ class Agent:
         loader = PyPDFLoader(tmp_file_path)
         return loader
 
-    def GenOllama(self, question: str):
+    def GenOllama(self, question: str, enable_web_search: bool = False):
         """Tool-calling agent that can dynamically search documents."""
-        # System prompt for tool-calling agent
-        system_prompt = """You are an academic research companion with access to multiple information sources.
+        # Dynamic system prompt and tool binding based on web search setting
+        if enable_web_search:
+            tools = [self.vectorToolInstance, self.webToolInstance]
+            system_prompt = """You are an academic research companion with access to multiple information sources.
 
 Available tools:
 - vectorToolInstance: Search through uploaded PDF documents for specific information
@@ -83,14 +82,31 @@ Guidelines:
 - If no relevant information exists, clearly state this
 
 Be concise, academic, and evidence-based in your responses."""
+        else:
+            tools = [self.vectorToolInstance]
+            system_prompt = """You are an academic research companion specializing in analyzing PDF documents.
+
+Available tools:
+- vectorToolInstance: Search through uploaded PDF documents for specific information
+
+Guidelines:
+- Use vectorToolInstance when answering questions about uploaded documents
+- For general knowledge questions: Answer directly from your training
+- Always cite sources when using search results
+- If no relevant information exists, clearly state this
+
+Be concise, academic, and evidence-based in your responses."""
 
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=question),
         ]
 
+        # Create dynamic chat client with appropriate tools
+        chat_client = self.chatClient.bind_tools(tools)
+
         # Get initial LLM response
-        response = self.tool_bound_chat_client.invoke(messages)
+        response = chat_client.invoke(messages)
 
         # Check if LLM wants to call tools
         if hasattr(response, "tool_calls") and response.tool_calls:
@@ -111,7 +127,7 @@ Be concise, academic, and evidence-based in your responses."""
                     )
 
             # Get final response with tool results
-            final_response = self.tool_bound_chat_client.invoke(messages)
+            final_response = chat_client.invoke(messages)
             return final_response
 
         # No tools called - return direct response
@@ -121,7 +137,7 @@ Be concise, academic, and evidence-based in your responses."""
         return self.vectorStore._collection.count() == 0
 
     def vector_search_tool(self, query: str, k: int = 3) -> str:
-        f"""Search the vector store for relevant document chunks based on the query.
+        """Search the vector store for relevant document chunks based on the query.
 
         Args:
             query: The search query to find relevant documents
@@ -205,12 +221,21 @@ Instructions:
         "Upload a pdf please", type="pdf"
     )  # uploading the pdf
 
+    # Web search toggle
+    enable_web_search = st.checkbox(
+        "🌐 Enable Web Search",
+        value=False,  # Default OFF for speed
+        help="Allow AI to search the web for additional information. May slow down responses.",
+    )
+
     userPrompt = st.text_area("Prompting")
     if userPrompt:
         answerBtn = st.button("Send prompt")
         if answerBtn:
             with st.spinner("Processing llm..."):
-                answer = ollamaAgent.GenOllama(userPrompt).content
+                answer = ollamaAgent.GenOllama(
+                    userPrompt, enable_web_search=enable_web_search
+                ).content
                 st.session_state["answer"] = answer
                 time.sleep(0.5)
 
