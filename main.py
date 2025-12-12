@@ -30,7 +30,7 @@ class Agent:
             base_url="http://172.16.5.234:3000", model="embeddinggemma:300m"
         )
         self.chatClient = ChatOllama(
-            base_url="http://172.16.5.234:3000", model="gemma3:270m"
+            base_url="http://172.16.5.234:3000", model="qwen3:4b"
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -130,8 +130,10 @@ Instructions:
     if userPrompt:
         answerBtn = st.button("Send prompt")
         if answerBtn:
-            answer = ollamaAgent.GenOllama(userPrompt).content
-            st.session_state["answer"] = answer
+            with st.spinner("Processing llm..."):
+                answer = ollamaAgent.GenOllama(userPrompt).content
+                st.session_state["answer"] = answer
+                time.sleep(.5)
 
     # Display persisted answer
     if "answer" in st.session_state:
