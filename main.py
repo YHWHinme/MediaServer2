@@ -16,6 +16,7 @@ import streamlit as st
 import time
 
 from tools.pdf import loadPdf
+import soundGen
 
 
 class Agent:
@@ -29,7 +30,7 @@ class Agent:
             base_url="http://172.16.5.234:3000", model="embeddinggemma:300m"
         )
         self.chatClient = ChatOllama(
-            base_url="http://172.16.5.234:3000", model="deepseek-r1:1.5b"
+            base_url="http://172.16.5.234:3000", model="gemma3:270m"
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -62,6 +63,9 @@ Instructions:
 
         # New: Retriever for vector store
         self.retriever = self.vectorStore.as_retriever(search_kwargs={"k": 3})
+
+        # TTS function
+        self.tts = soundGen.text_to_speech
 
         # New: RAG chain
         # TODO: Find a way to get rid of this function and add HumanMessage directly into the rag chain
@@ -98,7 +102,7 @@ Instructions:
         return self.vectorStore._collection.count() == 0
 
 
-def main():
+def run_streamlit_app():
     sysTemplate = """
 You are an academic research companion specializing in analyzing PDF documents. Your role is to provide accurate, evidence-based answers using the provided context from academic sources.
 
@@ -125,10 +129,22 @@ Instructions:
     userPrompt = st.text_area("Prompting")
     if userPrompt:
         answerBtn = st.button("Send prompt")
-        if answerBtn:   
+        if answerBtn:
             answer = ollamaAgent.GenOllama(userPrompt).content
-            st.write(answer)
+            st.session_state["answer"] = answer
 
+    # Display persisted answer
+    if "answer" in st.session_state:
+        st.write(st.session_state["answer"])
+
+        # TTS button
+        if st.button("Generate Audio"):
+            ollamaAgent.tts(st.session_state["answer"], "output.wav")
+            st.session_state["audio_file"] = "output.wav"
+
+    # Display persisted audio if available
+    if "audio_file" in st.session_state:
+        st.audio(st.session_state["audio_file"])
 
     if uploadedPdf:
         # PDF post processing
@@ -160,4 +176,4 @@ Instructions:
 
 
 if __name__ == "__main__":
-    main()
+    run_streamlit_app()

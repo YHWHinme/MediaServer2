@@ -10,8 +10,10 @@ wheels/
 .venv
 __init__.py
 
+# Personal outputs
 .ipynb_checkpoints/
 Data/
+*.wav
 
 # Uv stuff
 uv.lock
