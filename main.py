@@ -25,10 +25,10 @@ class Agent:
 
     def __init__(self, template: str):
         self.embeddingClient = OllamaEmbeddings(
-            base_url="http://172.16.5.234:3000", model="embeddinggemma:300m"
+            base_url="http://172.16.5.250:3000", model="embeddinggemma:300m"
         )
         self.chatClient = ChatOllama(
-            base_url="http://172.16.5.234:3000", model="qwen3:4b"
+            base_url="http://172.16.5.250:3000", model="qwen3:4b"
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
