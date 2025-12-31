@@ -8,6 +8,7 @@
 - Test all: `uv run pytest` (no tests yet; add to tests/ dir)
 - Test single: `uv run pytest tests/test_file.py::test_function_name`
 - Type check: `uv run mypy .` (mypy not installed; add if needed)
+- Set up OpenAI API key: Copy `.env.example` to `.env` and add your API key
 
 ## Code Style Guidelines
 - **Imports**: Standard library first, then third-party (langchain, etc.), then local. Use absolute imports.
@@ -16,8 +17,18 @@
 - **Naming**: snake_case for variables/functions, CamelCase for classes, UPPER_CASE for constants.
 - **Error Handling**: Use try/except with specific exceptions. Log with logging module.
 - **Docstrings**: Use Google-style for functions/classes.
-- **Security**: Never log secrets/keys. Use env vars for config (e.g., Ollama URLs).
+- **Security**: Never log secrets/keys. Use env vars for config (e.g., OpenAI API keys).
 - **Commits**: Conventional commits (feat:, fix:, etc.). No secrets in commits.
+
+## Environment Variables
+- OPENAI_API_KEY: Required for OpenAI API access
+- OPENAI_MODEL: Chat model (default: gpt-4)
+- OPENAI_EMBEDDING_MODEL: Embedding model (default: text-embedding-ada-002)
+
+## Cost Monitoring
+- Cost monitoring function added but unimplemented (returns placeholder data)
+- Tracks estimated API costs for GPT-4 usage
+- TODO: Implement actual cost calculation using OpenAI response metadata
 
 ## Context Access Issue and Fix
 
@@ -72,6 +83,7 @@ Implement a tool-calling agent (inspired by the SimpleAgent class) that allows t
 This fix should resolve the context access issue by making information retrieval LLM-driven and explicit.
 
 ## Pending Improvements
+- ✅ COMPLETED: Migrated from Ollama to OpenAI GPT-4 with tool calling support
 - ✅ COMPLETED: Fix prompt template in Agent class: Replaced raw string template with ChatPromptTemplate.from_messages() for proper chat formatting, including system message with {context} and MessagesPlaceholder for {question} to resolve ValueError and align with working examples.
 - Add MCP (Model Context Protocol) integration: Implement MCP Python SDK to enable Obsidian integration via Docker MCP server. Requires API key management (python-dotenv), MCP client setup, and Docker container orchestration for connecting to Obsidian Local REST API plugin.
 

@@ -1,5 +1,6 @@
 # utility imports
 import tempfile
+from pathlib import Path
 from langchain_chroma import Chroma
 
 from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
@@ -7,7 +8,12 @@ from langchain_core.tools import tool
 from langchain_community.document_loaders import PyPDFLoader
 
 # Ai imports
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 # Local file imports
 import streamlit as st
@@ -18,17 +24,24 @@ import soundGen
 
 
 class Agent:
-    chatClient: ChatOllama
+    chatClient: ChatOpenAI
     vectorStore: Chroma
-    embeddingClient: OllamaEmbeddings
+    embeddingClient: OpenAIEmbeddings
     chromaPath: str
 
     def __init__(self, template: str):
-        self.embeddingClient = OllamaEmbeddings(
-            base_url="http://172.16.5.250:3000", model="embeddinggemma:300m"
+        # Validate API key
+        if not os.getenv("OPENAI_API_KEY"):
+            raise ValueError("OPENAI_API_KEY environment variable is required")
+
+        self.embeddingClient = OpenAIEmbeddings(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
         )
-        self.chatClient = ChatOllama(
-            base_url="http://172.16.5.250:3000", model="qwen3:4b"
+        self.chatClient = ChatOpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            model=os.getenv("OPENAI_MODEL", "gpt-4"),
+            temperature=0.1,
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -48,30 +61,48 @@ class Agent:
         )
 
     def process_pdf(self, uploaded_file):
-        """Process Streamlit UploadedFile into PyPDFLoader using temp file"""
+        """Process Streamlit UploadedFile into organized storage with metadata extraction"""
 
-        # Create temporary file from uploaded file bytes
+        # Extract original filename for fallback naming
+        original_filename = uploaded_file.name
+        safe_filename = (
+            Path(original_filename).stem.replace("/", "_").replace("\\", "_")
+        )
+
+        # Create temp file
         with tempfile.NamedTemporaryFile(
             dir=self.tempDir, delete=False, suffix=".pdf"
         ) as tmp_file:
             tmp_file.write(uploaded_file.getvalue())
             tmp_file_path = tmp_file.name
 
-        # Create loader with temp file path (cleanup moved to loadPdf)
+        # Create loader
         loader = PyPDFLoader(tmp_file_path)
+
+        # Process with enhanced metadata extraction
+        # Pass OpenAI embedding function to ensure consistency
+        loadPdf(loader, self.vectorStore)
+
         return loader
 
-    def GenOllama(self, question: str):
+    def GenOpenAI(self, question: str):
+        # NOTE: Reading system prompt from external file
+        system_prompt: str
+
+        with open("systemPrompt.md") as f:
+            system_prompt = f.read()
+
+
         """Tool-calling agent that can dynamically search documents."""
         # System prompt for tool-calling agent
-        system_prompt = """You are an academic research companion specializing in analyzing PDF documents.
+        system_prompt1 = """You are an academic research companion specializing in analyzing PDF documents.
 
-You have access to a vector_search_tool that can search through uploaded documents.
-Use this tool when you need specific information from the documents.
+CRITICAL: Always use the vector_search_tool FIRST when answering questions that could benefit from document evidence, even if you think you know the answer from training data. Document-specific information takes precedence over general knowledge.
 
 Guidelines:
-- For questions requiring document evidence: Use vector_search_tool first
-- For general knowledge questions: Answer directly from your training
+- For ANY question related to uploaded content: Use vector_search_tool first
+- For questions requiring evidence or specific details: Use vector_search_tool first
+- For general knowledge questions: Answer directly only if no documents are relevant
 - Always cite document sources when using search results
 - If no relevant documents exist, clearly state this
 
@@ -87,6 +118,9 @@ Be concise, academic, and evidence-based in your responses."""
 
         # Check if LLM wants to call tools
         if hasattr(response, "tool_calls") and response.tool_calls:
+            # Add the assistant's tool-calling message to maintain proper conversation structure
+            messages.append(response)
+
             # Execute tools and add results to messages
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "vector_search_tool":
@@ -160,6 +194,30 @@ Be concise, academic, and evidence-based in your responses."""
 
         return vector_search_tool
 
+    def monitor_cost(self, response) -> dict:
+        """Monitor and track OpenAI API costs for responses.
+
+        TODO: Implement cost calculation based on:
+        - Model used (gpt-4 pricing)
+        - Input tokens (prompt)
+        - Output tokens (response)
+        - Tool calls if any
+
+        Args:
+            response: OpenAI API response object
+
+        Returns:
+            dict: Cost information (currently placeholder)
+        """
+        return {
+            "model": "gpt-4",
+            "estimated_cost_cents": 0.0,  # TODO: calculate actual cost
+            "input_tokens": 0,  # TODO: extract from response
+            "output_tokens": 0,  # TODO: extract from response
+            "tool_calls": 0,  # TODO: count tool calls
+            "implemented": False,
+        }
+
 
 def run_streamlit_app():
     sysTemplate = """
@@ -178,10 +236,10 @@ Instructions:
 - Structure your response with headings like "Summary," "Key Insights," or "Conclusion" for clarity.
 """
 
-    ollamaAgent = Agent(template=sysTemplate)
+    openaiAgent = Agent(template=sysTemplate)
 
-    #Checking if chroma db is empty
-    if ollamaAgent.vectorStore._collection.count() == 0:
+    # Checking if chroma db is empty
+    if openaiAgent.vectorStore._collection.count() == 0:
         st.info("The vector store is empty, upload something", icon="ℹ️")
     # Streamlit UI
     uploadedPdf = st.file_uploader(
@@ -193,7 +251,7 @@ Instructions:
         answerBtn = st.button("Send prompt")
         if answerBtn:
             with st.spinner("Processing llm..."):
-                answer = ollamaAgent.GenOllama(userPrompt).content
+                answer = openaiAgent.GenOpenAI(userPrompt).content
                 st.session_state["answer"] = answer
                 time.sleep(0.5)
 
@@ -203,7 +261,7 @@ Instructions:
 
         # TTS button
         if st.button("Generate Audio"):
-            ollamaAgent.tts(st.session_state["answer"], "output.wav")
+            openaiAgent.tts(st.session_state["answer"], "output.wav")
             st.session_state["audio_file"] = "output.wav"
 
     # Display persisted audio if available
@@ -214,16 +272,20 @@ Instructions:
         # PDF post processing
         if st.button("Process Pdf"):  # Ensuring button is clicked
             try:
-                # Stage 1: File processing
+                # Stage 1: File processing and permanent storage
                 with st.spinner("📄 Processing uploaded PDF..."):
-                    st.info("🔄 Step 1/2: Creating PDF loader...")
-                    processed_pdf = ollamaAgent.process_pdf(uploadedPdf)
+                    st.info(
+                        "🔄 Step 1/2: Creating PDF loader and organizing storage..."
+                    )
+                    processed_pdf = openaiAgent.process_pdf(uploadedPdf)
                     time.sleep(0.5)  # Brief pause for UX
 
-                # Stage 2: Document loading and vector store addition
+                # Stage 2: Document loading and vector store addition (now handled in process_pdf)
                 with st.spinner("📚 Loading documents and adding to knowledge base..."):
-                    st.info("🔄 Step 2/2: Processing and indexing content...")
-                    loadPdf(processed_pdf, ollamaAgent.vectorStore)
+                    st.info(
+                        "🔄 Step 2/2: Processing and indexing content with OpenAI embeddings..."
+                    )
+                    # loadPdf is now called within process_pdf method with proper OpenAI embedding function
                     time.sleep(0.5)
 
                 # Success notification
@@ -231,7 +293,7 @@ Instructions:
                 st.balloons()  # Celebration animation
 
                 # Show processing summary
-                db_size = ollamaAgent.vectorStore._collection.count()
+                db_size = openaiAgent.vectorStore._collection.count()
                 st.info(f"📊 Knowledge base now contains {db_size} document chunks")
 
             except Exception as e:
