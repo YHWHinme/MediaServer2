@@ -8,12 +8,10 @@ from langchain_core.tools import tool
 from langchain_community.document_loaders import PyPDFLoader
 
 # Ai imports
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
-import os
+from langchain_community.chat_models import ChatLlamaCpp
+from langchain_community.embeddings import OllamaEmbeddings
 from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+import queue
 
 # Local file imports
 import streamlit as st
@@ -23,25 +21,29 @@ from tools.pdf import loadPdf
 import soundGen
 
 
+# Load environment variables
+load_dotenv()
+
+
 class Agent:
-    chatClient: ChatOpenAI
+    chatClient: ChatLlamaCpp
     vectorStore: Chroma
-    embeddingClient: OpenAIEmbeddings
+    embeddingClient: OllamaEmbeddings
     chromaPath: str
 
     def __init__(self, template: str):
-        # Validate API key
-        if not os.getenv("OPENAI_API_KEY"):
-            raise ValueError("OPENAI_API_KEY environment variable is required")
-
-        self.embeddingClient = OpenAIEmbeddings(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            model=os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-ada-002"),
+        # Local models - no API keys needed
+        self.embeddingClient = OllamaEmbeddings(
+            model="embeddinggemma:300m",
         )
-        self.chatClient = ChatOpenAI(
-            api_key=os.getenv("OPENAI_API_KEY"),
-            model=os.getenv("OPENAI_MODEL", "gpt-4"),
+        self.chatClient = ChatLlamaCpp(
             temperature=0.1,
+            model_path="/home/oj2/Downloads/models/gemma-3-4b-it-Q3_K_S.gguf",
+            max_tokens=256,
+            n_ctx=1000,  # Reduced to prevent VRAM overflow
+            n_gpu_layers=100,  # Increased for better GPU utilization (fits in 6GB VRAM)
+            n_threads=4,  # Limited to prevent CPU competition with RAM
+            verbose=False,
         )
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
@@ -91,7 +93,6 @@ class Agent:
 
         with open("systemPrompt.md") as f:
             system_prompt = f.read()
-
 
         """Tool-calling agent that can dynamically search documents."""
         # System prompt for tool-calling agent
@@ -195,27 +196,21 @@ Be concise, academic, and evidence-based in your responses."""
         return vector_search_tool
 
     def monitor_cost(self, response) -> dict:
-        """Monitor and track OpenAI API costs for responses.
-
-        TODO: Implement cost calculation based on:
-        - Model used (gpt-4 pricing)
-        - Input tokens (prompt)
-        - Output tokens (response)
-        - Tool calls if any
+        """Monitor local model usage (no costs for local inference).
 
         Args:
-            response: OpenAI API response object
+            response: Local model response object
 
         Returns:
-            dict: Cost information (currently placeholder)
+            dict: Usage information (local models have no costs)
         """
         return {
-            "model": "gpt-4",
-            "estimated_cost_cents": 0.0,  # TODO: calculate actual cost
-            "input_tokens": 0,  # TODO: extract from response
-            "output_tokens": 0,  # TODO: extract from response
-            "tool_calls": 0,  # TODO: count tool calls
-            "implemented": False,
+            "model": "qwen3-4b-local",
+            "estimated_cost_cents": 0.0,  # No cost for local models
+            "input_tokens": 0,  # Could extract from response if needed
+            "output_tokens": 0,  # Could extract from response if needed
+            "tool_calls": 0,  # Could count tool calls if needed
+            "implemented": False,  # Local models don't need cost tracking
         }
 
 
