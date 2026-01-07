@@ -1,25 +1,22 @@
 # utility imports
 import tempfile
+import time
 from pathlib import Path
-from langchain_chroma import Chroma
-
-from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage
-from langchain_core.tools import tool
-from langchain_community.document_loaders import PyPDFLoader
-
-# Ai imports
-from langchain_community.chat_models import ChatLlamaCpp
-from langchain_community.embeddings import OllamaEmbeddings
-from dotenv import load_dotenv
-import queue
 
 # Local file imports
 import streamlit as st
-import time
+from dotenv import load_dotenv
+from langchain_chroma import Chroma
+# Ai imports
+from langchain_community.chat_models import ChatLlamaCpp
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.embeddings import OllamaEmbeddings
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+from langchain_core.tools import tool
+from pydantic import BaseModel, Field
 
-from tools.pdf import loadPdf
 import soundGen
-
+from tools.pdf import loadPdf
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +27,15 @@ class Agent:
     vectorStore: Chroma
     embeddingClient: OllamaEmbeddings
     chromaPath: str
+
+    class VectorSearchInput(BaseModel):
+        query: str = Field(description="The search query to find relevant documents")
+        k: int = Field(
+            default=3,
+            ge=1,
+            le=10,
+            description="Number of top similar chunks to retrieve (default: 3, max: 10)",
+        )
 
     def __init__(self, template: str):
         # Local models - no API keys needed
@@ -59,7 +65,7 @@ class Agent:
         # Create and bind the vector search tool
         self.vector_search_tool_instance = self.create_vector_search_tool()
         self.tool_bound_chat_client = self.chatClient.bind_tools(
-            [self.vector_search_tool_instance]
+            tools=[self.vector_search_tool_instance]
         )
 
     def process_pdf(self, uploaded_file):
@@ -124,7 +130,7 @@ Be concise, academic, and evidence-based in your responses."""
 
             # Execute tools and add results to messages
             for tool_call in response.tool_calls:
-                if tool_call["name"] == "vector_search_tool":
+                if tool_call["name"] == "vector_search":
                     tool_result = self.vector_search_tool(
                         tool_call["args"]["query"], tool_call["args"].get("k", 3)
                     )
@@ -133,12 +139,13 @@ Be concise, academic, and evidence-based in your responses."""
                         ToolMessage(content=tool_result, tool_call_id=tool_call["id"])
                     )
 
-            # Get final response with tool results
-            final_response = self.tool_bound_chat_client.invoke(messages)
-            return final_response
+            # Stream final response with tool results
+            final_response_stream = self.tool_bound_chat_client.stream(messages)
+            return final_response_stream
 
-        # No tools called - return direct response
-        return response
+        # No tools called - stream direct response
+        response_stream = self.chatClient.stream(messages)
+        return response_stream
 
     def is_db_empty(self) -> bool:
         return self.vectorStore._collection.count() == 0
@@ -188,7 +195,7 @@ Be concise, academic, and evidence-based in your responses."""
     def create_vector_search_tool(self):
         """Create the vector search tool for binding to the LLM."""
 
-        @tool
+        @tool("vector_search", args_schema=self.VectorSearchInput)
         def vector_search_tool(query: str, k: int = 3) -> str:
             """Search the vector store for relevant document chunks based on the query."""
             return self.vector_search_tool(query, k)
@@ -246,9 +253,10 @@ Instructions:
         answerBtn = st.button("Send prompt")
         if answerBtn:
             with st.spinner("Processing llm..."):
-                answer = openaiAgent.GenOpenAI(userPrompt).content
-                st.session_state["answer"] = answer
-                time.sleep(0.5)
+                response_stream = openaiAgent.GenOpenAI(userPrompt)
+                # For streaming, we can't store the full response easily
+                # Display it directly and optionally store final result
+                st.write_stream(response_stream)
 
     # Display persisted answer
     if "answer" in st.session_state:
