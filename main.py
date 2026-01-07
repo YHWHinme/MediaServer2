@@ -1,14 +1,16 @@
 # utility imports
 import tempfile
 import time
+import os
 from pathlib import Path
 
 # Local file imports
 import streamlit as st
 from dotenv import load_dotenv
 from langchain_chroma import Chroma
+
 # Ai imports
-from langchain_community.chat_models import ChatLlamaCpp
+from langchain_openai import ChatOpenAI
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.embeddings import OllamaEmbeddings
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
@@ -23,7 +25,6 @@ load_dotenv()
 
 
 class Agent:
-    chatClient: ChatLlamaCpp
     vectorStore: Chroma
     embeddingClient: OllamaEmbeddings
     chromaPath: str
@@ -37,20 +38,18 @@ class Agent:
             description="Number of top similar chunks to retrieve (default: 3, max: 10)",
         )
 
-    def __init__(self, template: str):
+    def __init__(self):
         # Local models - no API keys needed
         self.embeddingClient = OllamaEmbeddings(
             model="embeddinggemma:300m",
         )
-        self.chatClient = ChatLlamaCpp(
+        self.chatClient = ChatOpenAI(
+            api_key=os.getenv("ZEN_API_KEY"),
+            base_url="https://opencode.ai/zen/v1",
+            model="grok-code",
             temperature=0.1,
-            model_path="/home/oj2/Downloads/models/gemma-3-4b-it-Q3_K_S.gguf",
-            max_tokens=256,
-            n_ctx=1000,  # Reduced to prevent VRAM overflow
-            n_gpu_layers=100,  # Increased for better GPU utilization (fits in 6GB VRAM)
-            n_threads=4,  # Limited to prevent CPU competition with RAM
-            verbose=False,
         )
+
         self.chromaPath = "./Data/Chroma"
         self.vectorStore = Chroma(
             collection_name="pdf_collection",
@@ -100,21 +99,7 @@ class Agent:
         with open("systemPrompt.md") as f:
             system_prompt = f.read()
 
-        """Tool-calling agent that can dynamically search documents."""
         # System prompt for tool-calling agent
-        system_prompt1 = """You are an academic research companion specializing in analyzing PDF documents.
-
-CRITICAL: Always use the vector_search_tool FIRST when answering questions that could benefit from document evidence, even if you think you know the answer from training data. Document-specific information takes precedence over general knowledge.
-
-Guidelines:
-- For ANY question related to uploaded content: Use vector_search_tool first
-- For questions requiring evidence or specific details: Use vector_search_tool first
-- For general knowledge questions: Answer directly only if no documents are relevant
-- Always cite document sources when using search results
-- If no relevant documents exist, clearly state this
-
-Be concise, academic, and evidence-based in your responses."""
-
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=question),
@@ -128,10 +113,14 @@ Be concise, academic, and evidence-based in your responses."""
             # Add the assistant's tool-calling message to maintain proper conversation structure
             messages.append(response)
 
+            # Progress: Starting search
+            yield from self._yield_progress_indicators(1, 3, "Analyzing search query")
+
             # Execute tools and add results to messages
+            tool_result = None
             for tool_call in response.tool_calls:
                 if tool_call["name"] == "vector_search":
-                    tool_result = self.vector_search_tool(
+                    tool_result = self.vector_search(
                         tool_call["args"]["query"], tool_call["args"].get("k", 3)
                     )
                     # Add tool result as a ToolMessage
@@ -139,18 +128,42 @@ Be concise, academic, and evidence-based in your responses."""
                         ToolMessage(content=tool_result, tool_call_id=tool_call["id"])
                     )
 
+            # Progress: Search complete, processing results
+            yield from self._yield_progress_indicators(
+                2, 3, "Executing document search"
+            )
+
+            # Extract document count for progress indicator
+            # This is a bit hacky - we need to parse the tool result to get count
+            doc_count = 0
+            if tool_result and "Document 1:" in tool_result:
+                # Count how many "Document X:" entries there are
+                import re
+
+                matches = re.findall(r"Document \d+:", tool_result)
+                doc_count = len(matches)
+
+            yield from self._yield_progress_indicators(
+                3, 3, "Processing search results", doc_count
+            )
+
             # Stream final response with tool results
             final_response_stream = self.tool_bound_chat_client.stream(messages)
-            return final_response_stream
+            for chunk in final_response_stream:
+                if hasattr(chunk, "content") and chunk.content:
+                    yield chunk.content
 
-        # No tools called - stream direct response
-        response_stream = self.chatClient.stream(messages)
-        return response_stream
+        else:
+            # No tools called - stream direct response
+            response_stream = self.chatClient.stream(messages)
+            for chunk in response_stream:
+                if hasattr(chunk, "content") and chunk.content:
+                    yield chunk.content
 
     def is_db_empty(self) -> bool:
         return self.vectorStore._collection.count() == 0
 
-    def vector_search_tool(self, query: str, k: int = 3) -> str:
+    def vector_search(self, query: str, k: int = 3) -> str:
         """Search the vector store for relevant document chunks based on the query.
 
         Args:
@@ -198,9 +211,25 @@ Be concise, academic, and evidence-based in your responses."""
         @tool("vector_search", args_schema=self.VectorSearchInput)
         def vector_search_tool(query: str, k: int = 3) -> str:
             """Search the vector store for relevant document chunks based on the query."""
-            return self.vector_search_tool(query, k)
+            return self.vector_search(query, k)
 
         return vector_search_tool
+
+    def _yield_progress_indicators(
+        self, step: int, total_steps: int, action: str, doc_count=None
+    ):
+        """Yield progress indicators for tool execution (Options 1 & 2 only)"""
+        # Option 1: Status emoji + text
+        status_emoji = "🔍" if step < total_steps else "✅"
+        yield f"{action}\n"
+
+        # Option 2: Step counter
+        yield f"Step {step}/{total_steps}: {action}\n"
+
+        # Document count for final step
+        if doc_count is not None and step == total_steps:
+            plural = "" if doc_count == 1 else "s"
+            yield f"Found {doc_count} relevant document{plural}. Generating response...\n"
 
     def monitor_cost(self, response) -> dict:
         """Monitor local model usage (no costs for local inference).
@@ -222,23 +251,7 @@ Be concise, academic, and evidence-based in your responses."""
 
 
 def run_streamlit_app():
-    sysTemplate = """
-You are an academic research companion specializing in analyzing PDF documents. Your role is to provide accurate, evidence-based answers using the provided context from academic sources.
-
-Context from documents:
-{context}
-
-Question: {question}
-
-Instructions:
-- Answer based solely on the provided context.
-- Answer if the question isn't academic, don't give an academic answer- Cite sources by referencing document metadata (e.g., page numbers or titles) if available in the context.
-- If the context is insufficient, state "Insufficient information in the provided documents" and suggest rephrasing the question.
-- Maintain an academic tone: objective, formal, and concise.
-- Structure your response with headings like "Summary," "Key Insights," or "Conclusion" for clarity.
-"""
-
-    openaiAgent = Agent(template=sysTemplate)
+    openaiAgent = Agent()
 
     # Checking if chroma db is empty
     if openaiAgent.vectorStore._collection.count() == 0:
@@ -254,18 +267,44 @@ Instructions:
         if answerBtn:
             with st.spinner("Processing llm..."):
                 response_stream = openaiAgent.GenOpenAI(userPrompt)
-                # For streaming, we can't store the full response easily
-                # Display it directly and optionally store final result
-                st.write_stream(response_stream)
 
-    # Display persisted answer
-    if "answer" in st.session_state:
-        st.write(st.session_state["answer"])
+                # Collect all yielded content
+                all_content = []
+                for chunk in response_stream:
+                    all_content.append(chunk)
 
-        # TTS button
-        if st.button("Generate Audio"):
-            openaiAgent.tts(st.session_state["answer"], "output.wav")
-            st.session_state["audio_file"] = "output.wav"
+                # Based on testing, first 7 chunks are progress indicators
+                progress_indicators = all_content[:7]
+                response_content = all_content[7:]
+
+                # Display progress indicators with st.info()
+                for indicator in progress_indicators:
+                    if "🔍" in indicator and "Analyzing" in indicator:
+                        st.info(indicator.strip(), icon="🔍")
+                    elif "Step 1/3" in indicator:
+                        st.info(indicator.strip(), icon="📊")
+                    elif "🔍" in indicator and "Executing" in indicator:
+                        st.info(indicator.strip(), icon="🔍")
+                    elif "Step 2/3" in indicator:
+                        st.info(indicator.strip(), icon="📊")
+                    elif "✅" in indicator:
+                        st.info(indicator.strip(), icon="✅")
+                    elif "Step 3/3" in indicator:
+                        st.info(indicator.strip(), icon="📊")
+                    elif "Found" in indicator:
+                        st.success(indicator.strip())
+
+                # Display the response content
+                full_response = "".join(response_content)
+                if full_response.strip():
+                    st.write(full_response)
+                    # Store in session state for audio
+                    st.session_state["answer"] = full_response
+
+                    # TTS button (appears right after response)
+                    if st.button("Generate Audio"):
+                        openaiAgent.tts(st.session_state["answer"], "output.wav")
+                        st.session_state["audio_file"] = "output.wav"
 
     # Display persisted audio if available
     if "audio_file" in st.session_state:

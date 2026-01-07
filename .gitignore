@@ -16,6 +16,7 @@ Data/
 *.wav
 *.env
 .env
+something.txt
 
 # Uv stuff
 uv.lock
