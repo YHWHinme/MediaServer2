@@ -266,45 +266,12 @@ def run_streamlit_app():
         answerBtn = st.button("Send prompt")
         if answerBtn:
             with st.spinner("Processing llm..."):
-                response_stream = openaiAgent.GenOpenAI(userPrompt)
+                st.session_state["answer"] = st.write_stream(openaiAgent.GenOpenAI(userPrompt))
 
-                # Collect all yielded content
-                all_content = []
-                for chunk in response_stream:
-                    all_content.append(chunk)
-
-                # Based on testing, first 7 chunks are progress indicators
-                progress_indicators = all_content[:7]
-                response_content = all_content[7:]
-
-                # Display progress indicators with st.info()
-                for indicator in progress_indicators:
-                    if "🔍" in indicator and "Analyzing" in indicator:
-                        st.info(indicator.strip(), icon="🔍")
-                    elif "Step 1/3" in indicator:
-                        st.info(indicator.strip(), icon="📊")
-                    elif "🔍" in indicator and "Executing" in indicator:
-                        st.info(indicator.strip(), icon="🔍")
-                    elif "Step 2/3" in indicator:
-                        st.info(indicator.strip(), icon="📊")
-                    elif "✅" in indicator:
-                        st.info(indicator.strip(), icon="✅")
-                    elif "Step 3/3" in indicator:
-                        st.info(indicator.strip(), icon="📊")
-                    elif "Found" in indicator:
-                        st.success(indicator.strip())
-
-                # Display the response content
-                full_response = "".join(response_content)
-                if full_response.strip():
-                    st.write(full_response)
-                    # Store in session state for audio
-                    st.session_state["answer"] = full_response
-
-                    # TTS button (appears right after response)
-                    if st.button("Generate Audio"):
-                        openaiAgent.tts(st.session_state["answer"], "output.wav")
-                        st.session_state["audio_file"] = "output.wav"
+        # TTS button (appears right after response)
+        if st.button("Generate Audio"):
+            openaiAgent.tts(st.session_state["answer"], "output.wav")
+            st.session_state["audio_file"] = "output.wav"
 
     # Display persisted audio if available
     if "audio_file" in st.session_state:
