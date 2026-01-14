@@ -22,10 +22,10 @@ def text_to_speech(text, output_file="sound.wav"):
     else:
         print("Error: No audio generated.")
 
-if __name__ == "__main__":
-    inputFile: str = sys.argv[1]
-    readText: str
-    with open(inputFile) as f:
-        readText = f.read()
 
+if __name__ == "__main__":
+    readText: str = sys.argv[1]
     text_to_speech(text=readText, output_file="second.wav")
+
+    ## Playing the automatically
+    sf.SoundFile("second.wav")
